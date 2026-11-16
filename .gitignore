@@ -218,3 +218,19 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# local notes
+HANDOFF.md
+CLAUDE.md
+.claude/
+
+# match data and outputs
+data/
+match-data/
+*.mp4
+*.csv
+*_atd.txt
+*_atd.xml
+*_smart_tagging.xml
+evaluation/reports/
+scoreboard.csv
