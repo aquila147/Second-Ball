@@ -110,10 +110,15 @@ def fragment(players, slot_team, rng):
     return out
 
 
-def degrade(match, seed):
-    """A copy of the match with a match-like ball track, ball dropout and track fragmentation."""
+def degrade(match, seed, dead=None):
+    """A copy of the match with a match-like ball track, ball dropout and track fragmentation.
+
+    `dead` marks stoppages; by default they are the frames without a ball, as in the
+    Metrica sample games.
+    """
     rng = np.random.default_rng(seed)
-    dead = np.isnan(match.ball[:, 0])
+    if dead is None:
+        dead = np.isnan(match.ball[:, 0])
 
     ball = fill_dead_ball(match.ball, match.halves, match.pitch, rng)
     for start, stop in match.halves:

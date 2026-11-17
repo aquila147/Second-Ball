@@ -155,29 +155,39 @@ def count_transitions(labels, halves):
     counts = np.ones((3, 3))
     for start, stop in halves:
         part = labels[start:stop]
-        np.add.at(counts, (part[:-1], part[1:]), 1)
+        keep = (part[:-1] < 3) & (part[1:] < 3)
+        np.add.at(counts, (part[:-1][keep], part[1:][keep]), 1)
     return counts
 
 
-def train(games):
-    """Fit the classifier and the transition matrix on [(name, match, labels)]."""
-    rows, targets = [], []
-    counts = np.zeros((3, 3))
-    for _, match, labels in games:
-        names, data, _, _ = matrix(match)
-        graded = labels < 3
-        flipped, flipped_labels = mirror(names, data, labels)
-        rows += [data[graded], flipped[graded]]
-        targets += [labels[graded], flipped_labels[graded]]
-        counts += count_transitions(labels, match.halves)
-        counts += count_transitions(flipped_labels, match.halves)
+def examples(match, labels, step=1):
+    """(names, rows, targets, transition counts) for one match, with its mirror image.
 
-    target = np.concatenate(targets)
-    booster = lgb.train(PARAMS, lgb.Dataset(np.concatenate(rows), target, feature_name=names),
-                        ROUNDS)
+    `step` keeps every step-th graded frame; neighbouring frames carry nearly the same features.
+    """
+    names, data, _, _ = matrix(match)
+    graded = np.flatnonzero(labels < 3)[::step]
+    flipped, flipped_labels = mirror(names, data, labels)
+    rows = np.concatenate([data[graded], flipped[graded]])
+    targets = np.concatenate([labels[graded], flipped_labels[graded]])
+    counts = count_transitions(labels, match.halves) + count_transitions(flipped_labels, match.halves)
+    return names, rows, targets, counts
+
+
+def fit(names, rows, targets, counts):
+    """Classifier and transition matrix from stacked examples."""
+    booster = lgb.train(PARAMS, lgb.Dataset(rows, targets, feature_name=names), ROUNDS)
     transitions = counts / counts.sum(axis=1, keepdims=True)
-    prior = np.bincount(target, minlength=3) / len(target)
+    prior = np.bincount(targets, minlength=3) / len(targets)
     return Model(booster, transitions, prior)
+
+
+def train(games, extra=()):
+    """Fit on [(name, match, labels)] plus already computed examples from `extra`."""
+    parts = [examples(match, labels) for _, match, labels in games] + list(extra)
+    names = parts[0][0]
+    return fit(names, np.concatenate([p[1] for p in parts]), np.concatenate([p[2] for p in parts]),
+               sum(p[3] for p in parts))
 
 
 def emissions(model, match, feats):

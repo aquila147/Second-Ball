@@ -4,9 +4,9 @@ Ball possession labels for More than a Hack 2027: one of `H`, `A`, `D` or `X` fo
 199,319 frames of the tactical video of FC Barcelona vs Athletic Club.
 
 The method uses the tactical tracking and the Smart Tagging file only. A LightGBM classifier,
-trained on the three public Metrica sample games, turns per-frame tracking features into
-evidence, and a three-state hidden Markov model decodes it into labels. See
-[TECHNICAL.md](TECHNICAL.md).
+trained on the three public Metrica sample games and the 64 matches of the PFF FC World Cup 2022
+data, turns per-frame tracking features into evidence, and a three-state hidden Markov model
+decodes it into labels. See [TECHNICAL.md](TECHNICAL.md).
 
 ## Reproducing the submission
 
@@ -44,8 +44,13 @@ the classifier.
 python validate.py              # leave-one-game-out score of the rules on the noised sample games
 python validate.py --learned    # the same for the learned emissions
 python validate.py --seed 11    # the same with another draw of the noise model
-python train.py                 # rebuild models/ from the sample games
+python convert_pff.py ../pff-data   # convert the PFF World Cup 2022 data (only needed to retrain)
+python train.py                 # rebuild models/ from the sample games and the PFF data
+python broadcast_gate.py        # the broadcast-tracking check behind dropping the broadcast
 ```
+
+The PFF data is free after registering with Gradient Sports (formerly PFF FC); it is not included
+here.
 
 ## Other commands
 
@@ -75,9 +80,12 @@ possession/
   sample.py      sample game loaders and rule-derived reference labels
   noise.py       makes sample tracking resemble the match tracking
   learned.py     LightGBM emissions: features, training, loading
+  pff.py         PFF World Cup 2022 conversion and reference labels
 models/          trained emissions
 make_submission.py
 train.py
+convert_pff.py
+broadcast_gate.py
 validate.py
 diagnostics.py
 evaluate_sample.py
@@ -87,5 +95,6 @@ tests/
 ## Acknowledgements
 
 Thresholds were checked against, and the learned emissions trained on, the Metrica Sports sample
-data (https://github.com/metrica-sports/sample-data). The loaders for the match data come from the
+data (https://github.com/metrica-sports/sample-data) and the PFF FC FIFA World Cup 2022 data
+(Gradient Sports). The loaders for the match data come from the
 challenge repository.

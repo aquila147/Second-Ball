@@ -10,7 +10,7 @@ three-state hidden Markov model turns it into a label sequence. There are two ve
 share everything except where the evidence comes from:
 
 - **Learned emissions (the submitted file).** A LightGBM classifier trained on the three public
-  Metrica sample games gives the evidence. Described under "Learned emissions" below.
+  Metrica sample games and 64 matches of the PFF FC World Cup 2022 data gives the evidence. Described under "Learned emissions" below.
 - **Rules** (`--rules`, the first submission). The evidence is built with hand-set rules,
   described in steps 1 to 9 and the next two sections.
 
@@ -103,16 +103,30 @@ matched to the metadata team names by string similarity.
 | `tactical/BAR-ATH_tactical_atd.xml` | Yes: team of each slot, team names |
 | `tactical/BAR-ATH_tactical_smart_tagging.xml` | Yes: phase team, set-piece lead-in, kick-off |
 | `tactical/BAR-ATH_tactical.mp4`, homography | No |
-| `broadcast/*` | No |
+| `broadcast/*` | Tried and dropped (see below) |
 | Public 5-minute ground truth | Not used to build, tune or select anything |
+
+The broadcast tracking was tested as a source for ball positions in the tactical ball gaps
+(`broadcast_gate.py`). Each broadcast shot was aligned to the tactical timeline by matching ball
+positions over all offsets and checked by matching player positions. Players at the chosen
+offsets agree to a median of 0.39 m, so the alignment mostly works, but the two ball tracks
+disagree by a median of 3.7 m per shot, only 13 of 89 shots pass a 2 m check, and where the
+tactical ball is missing the aligned broadcast has a ball on 1.2% of those frames (0.8% in gaps
+over 10 s). It was dropped.
 
 ## Training data
 
-The learned emissions are trained on the three public Metrica Sports sample games
-(https://github.com/metrica-sports/sample-data): other matches, with tracking and event data
-produced by Metrica Sports, about 428,000 frames in all. Labels for them are derived by rule from
-their tracking and events, as described below; no labels were written by hand. No labelled data
-from the challenge match is used for anything.
+No labelled data from the challenge match is used for anything. The learned emissions are
+trained on two sources of other matches:
+
+| Source | Matches | Labels | Access |
+|---|---|---|---|
+| Metrica Sports sample data (https://github.com/metrica-sports/sample-data) | 3 | Derived by rule from the sample tracking and Metrica's event data | Public |
+| PFF FC FIFA World Cup 2022 data (now Gradient Sports) | 64 | Derived by rule from the game events PFF embeds in its tracking files; the events are collected by PFF analysts | Free after registering at https://www.gradientsports.com/blog/pff-fc-release-2022-world-cup-data |
+
+We wrote no labels by hand. The PFF data is not redistributed here; the repository contains only
+the model trained on it. PFF publishes no licence for the dataset beyond the site's general
+terms, and asks to be credited when findings are published.
 
 For the rule version, public sample game 3 from Metrica Sports (https://github.com/metrica-sports/sample-data, another
 match, tracking and event data produced by Metrica Sports) was used to check thresholds, through
@@ -132,11 +146,22 @@ The submitted file comes from this version, the default of `make_submission.py`.
 replaces the hand-set evidence of the rule version. Decoding, boundary snapping and the Smart
 Tagging terms (phase team, set-piece lead-in, kick-off) are unchanged.
 
-- **Training data.** The three public Metrica sample games (other matches; tracking and events
-  produced by Metrica Sports), about 428,000 frames. Labels are derived by rule
-  (`possession/sample.py`): dead ball where the tracking has no ball, otherwise the team of the
-  most recent `PASS`, `CARRY`, `RECOVERY`, `SET PIECE` or `SHOT` event. Nothing is labelled by
-  hand and nothing from the challenge match is used.
+- **Training data.** The three Metrica sample games, about 428,000 frames, and the 64 PFF
+  matches, about 9.4 million frames of which every tenth is used (neighbouring frames are nearly
+  identical). Metrica labels (`possession/sample.py`): dead ball where the tracking has no ball,
+  otherwise the team of the most recent `PASS`, `CARRY`, `RECOVERY`, `SET PIECE` or `SHOT` event.
+  PFF labels (`possession/pff.py`): dead ball from an `OUT` game event (ball out, whistle or goal)
+  until the next on-the-ball event, otherwise the team of the player in the most recent
+  on-the-ball event. Like the Metrica rule, it switches at each control of the ball. PFF's own
+  possession sequences were also tried as labels; they give longer possessions (13 s against
+  10 s) and scored slightly lower.
+- **PFF conversion** (`possession/pff.py`, `convert_pff.py`). The broadcast tracking (29.97 fps,
+  metres from the centre spot) is resampled to 25 fps by video time and moved to a corner
+  origin. The raw, unsmoothed player and ball positions are used: PFF's smoothed ball is placed
+  using the events, which would leak the labels into the features. Off-screen players are PFF's
+  estimates (on average 8 of 22 players are seen on a frame). Five matches lack half times in
+  their metadata; for those the halves come from the tracking's period clock, and extra time is
+  left out.
 - **Noise model** (`possession/noise.py`). The sample tracking is degraded to resemble the match
   tracking. During stoppages the ball is given a path to the restart spot, sometimes well beyond
   the line, and moved about on the way. The whole ball track is smoothed (Gaussian, sigma 5.5
@@ -147,7 +172,9 @@ Tagging terms (phase team, set-piece lead-in, kick-off) are unchanged.
   by `diagnostics.py` (ball velocity-change percentiles at two time scales, share of ball
   positions off the pitch and at rest, lengths of ball-missing runs, ball visibility around
   set-piece tags, tracked players per frame, track lifetimes). No labels are involved and no
-  setting was chosen by validation score.
+  setting was chosen by validation score. The PFF matches go through the same noise model, with
+  their stoppages taken from the labels, since their raw ball is not missing exactly when play
+  is dead.
 - **Features.** The Phase 1 features plus: ball velocity change over 6 and 12 frames; frames
   since and until the ball was seen; nearest player distances at the last and next frame with a
   ball; frames since and until each team's touches; touch counts over 4 s; rolling means over 1,
@@ -161,12 +188,14 @@ Tagging terms (phase team, set-piece lead-in, kick-off) are unchanged.
   up to that point as stoppage evidence.
 - **Model.** LightGBM, three classes, 300 rounds, 31 leaves, learning rate 0.05, fixed seed.
   Each frame is also used mirrored (teams and labels swapped). The transition matrix is counted
-  from the sample labels.
+  from the training labels of both sources.
 - **Emissions.** `0.5 * (log p(state | features) - log prior(state))`. The factor 0.5 accounts
   for neighbouring frames carrying the same evidence. Leave-one-game-out scores for 0.2, 0.3, 0.5
   and 1.0 are 0.542, 0.546, 0.555 and 0.559, all within noise; the middle value was kept.
-- **Validation.** Leave one game out: train on two noised games, score the third with the
-  official metric against its rule-derived labels.
+- **Validation.** Leave one Metrica game out: train on the other two noised Metrica games (and,
+  where stated, the 64 PFF matches), score the held-out game with the official metric. The first
+  learned version was chosen against the rule-derived Metrica labels described above; the next
+  two tables are from that stage.
 
 | | Game 1 | Game 2 | Game 3 | Mean spellF1 | Mean macroF1 |
 |---|---|---|---|---|---|
@@ -184,6 +213,40 @@ models retrained):
 
 The learned version scores higher on every held-out game under every seed, by 0.03 to 0.13. This
 comparison is what the choice of the submitted version rests on.
+
+### The reference labels, and the move to PFF
+
+The rule-derived Metrica labels switch possession at every recovery. The challenge defines a
+change of possession as the other team gaining *controlled* possession, and lists a touch without
+control, a deflection and an aerial duel won without control as not counting; as proxies for
+control it suggests a player keeping the ball for a few seconds or a team completing more than two
+consecutive passes. A second set of reference labels follows that wording (`sample.controlled`):
+a spell won by the other team counts only if that team keeps the ball for 3 s or completes more
+than two passes in it; otherwise possession stays with the previous team. Ball dropouts shorter
+than 1 s that do not end in a set piece are treated as live play first; in the sample tracking
+they fall at turnovers, not at stoppages. With these labels the sample games have 222 to 252
+possessions of about 15 s, against 330 to 386 of about 10 s.
+
+Every version was scored against both reference label sets, and against the controlled labels
+with 2 s and 4 s instead of 3 s, under three noise seeds (mean spellF1 on the held-out game):
+
+| Version | Rule labels | Controlled, 2 s | Controlled, 3 s | Controlled, 4 s |
+|---|---|---|---|---|
+| Rules | 0.475 | 0.547 | 0.564 | 0.555 |
+| Learned, Metrica only (second submission) | 0.556 | 0.620 | 0.617 | 0.605 |
+| Learned, Metrica only, trained on controlled labels | 0.520 | 0.607 | 0.618 | 0.622 |
+| Learned, Metrica + PFF possession sequences | 0.532 | 0.625 | 0.645 | 0.646 |
+| **Learned, Metrica + PFF (submitted)** | 0.543 | 0.632 | 0.647 | 0.642 |
+| PFF only, possession sequences | 0.508 | 0.603 | 0.628 | 0.636 |
+| PFF only | 0.518 | 0.610 | 0.630 | 0.634 |
+
+Against the controlled labels, adding PFF scores higher than the Metrica-only model under each of
+the three seeds (by 0.014 to 0.044 at 3 s); against the rule labels it scores lower. The controlled
+labels follow the challenge's definition and the rule labels contradict part of it, so the
+submitted version is the one that does best against the controlled labels. The rule version is
+last against every reference. The exact control test (3 s, more than two passes) is a reading of
+suggested proxies, not a specification; the top versions rank the same at 3 s and 4 s, and the
+gap is narrower at 2 s.
 
 These scores are optimistic for the match. The held-out game is degraded by the same noise model
 the classifier was trained on, and that model reproduces summary statistics of the match
@@ -210,7 +273,15 @@ about the ball track.
   reproduces summary statistics of the match tracking, not its actual errors, so the classifier
   may rely on something that does not carry over. No test data exist for this match to check it.
 - Reference labels for the sample games are derived by rule from events, which is not the same
-  definition as the challenge ground truth (derived from corrected tracking).
+  definition as the challenge ground truth (derived from corrected tracking). The controlled
+  labels follow the challenge's wording, but its proxies for control are suggestions, and the
+  ground truth may draw the line differently.
+- The PFF tracking is broadcast tracking of other competitions, with most players' positions
+  estimated off screen. The noise model makes its ball track resemble the match's, but not its
+  player positions.
+- The training labels switch at every control of the ball; only the reference used to choose
+  between versions follows the controlled definition. Training on controlled labels alone did not
+  help with three games of data.
 
 ## Reproduction
 
@@ -224,5 +295,13 @@ python make_submission.py
 writes `Second-Ball.csv` from the committed model in `models/`; no training is needed. Prediction
 has no random component. `python make_submission.py --rules` writes the rule version.
 
-To rebuild the model from the sample games, `python train.py`. Training uses a fixed seed and
-LightGBM's deterministic mode, and gives byte-identical model files on repeated runs.
+To rebuild the model, register for the PFF data, put it in `../pff-data` with its folder names
+(`Tracking Data`, `Metadata`, `Rosters`, `Event Data`), and run:
+
+```
+python convert_pff.py ../pff-data
+python train.py
+```
+
+Training uses fixed seeds and LightGBM's deterministic mode, and gives byte-identical model files
+on repeated runs.
