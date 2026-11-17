@@ -3,9 +3,10 @@
 Ball possession labels for More than a Hack 2027: one of `H`, `A`, `D` or `X` for each of the
 199,319 frames of the tactical video of FC Barcelona vs Athletic Club.
 
-The method uses the tactical tracking and the Smart Tagging file only. It has no trained model:
-per-frame evidence is built from the tracking with fixed rules and decoded with a three-state
-hidden Markov model. See [TECHNICAL.md](TECHNICAL.md).
+The method uses the tactical tracking and the Smart Tagging file only. A LightGBM classifier,
+trained on the three public Metrica sample games, turns per-frame tracking features into
+evidence, and a three-state hidden Markov model decodes it into labels. See
+[TECHNICAL.md](TECHNICAL.md).
 
 ## Reproducing the submission
 
@@ -24,7 +25,8 @@ Point `MTAH_DATA_DIR` at the match data bundle (the folder containing `tactical/
 python make_submission.py
 ```
 
-This writes `Second-Ball.csv`. The run is deterministic; it takes about a minute. If the
+This writes `Second-Ball.csv` using the trained model committed in `models/`; nothing is
+retrained. The run is deterministic and takes a few minutes. If the
 challenge repository is somewhere else, set `MTAH_REPO` to its path.
 
 Check the file with the challenge validator:
@@ -33,16 +35,30 @@ Check the file with the challenge validator:
 python ../more-than-a-hack-2027/evaluation/validate_submission.py Second-Ball.csv
 ```
 
+## Rule version and model training
+
+`python make_submission.py --rules` writes the earlier version, in which hand-set rules replace
+the classifier.
+
+```
+python validate.py              # leave-one-game-out score of the rules on the noised sample games
+python validate.py --learned    # the same for the learned emissions
+python validate.py --seed 11    # the same with another draw of the noise model
+python train.py                 # rebuild models/ from the sample games
+```
+
 ## Other commands
 
 ```
 python diagnostics.py                                             # summary statistics of the match data
+python diagnostics.py ../sample-data/data/Sample_Game_3 --noised  # the same for a noised sample game
 python evaluate_sample.py ../sample-data/data/Sample_Game_3       # run and score on sample game 3
 python -m unittest discover tests                                 # tests, on sample game 3
 ```
 
-The last two need the public [Metrica sample data](https://github.com/metrica-sports/sample-data)
-cloned next to this repository.
+Everything that touches the sample games needs the public
+[Metrica sample data](https://github.com/metrica-sports/sample-data) cloned next to this
+repository.
 
 ## Layout
 
@@ -56,8 +72,13 @@ possession/
   deadball.py    evidence that play is stopped
   decode.py      Viterbi decoding and boundary snapping
   pipeline.py    the steps in order, and the CSV writer
-  sample.py      reference labels for sample game 3
+  sample.py      sample game loaders and rule-derived reference labels
+  noise.py       makes sample tracking resemble the match tracking
+  learned.py     LightGBM emissions: features, training, loading
+models/          trained emissions
 make_submission.py
+train.py
+validate.py
 diagnostics.py
 evaluate_sample.py
 tests/
@@ -65,6 +86,6 @@ tests/
 
 ## Acknowledgements
 
-Thresholds were checked against sample game 3 of the Metrica Sports sample data
-(https://github.com/metrica-sports/sample-data). The loaders for the match data come from the
+Thresholds were checked against, and the learned emissions trained on, the Metrica Sports sample
+data (https://github.com/metrica-sports/sample-data). The loaders for the match data come from the
 challenge repository.

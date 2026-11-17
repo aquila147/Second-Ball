@@ -1,14 +1,16 @@
 """Whole-match summary statistics of the tracking and Smart Tagging. No per-frame output.
 
     python diagnostics.py                                        # challenge match
-    python diagnostics.py ../sample-data/data/Sample_Game_3      # sample game 3
+    python diagnostics.py ../sample-data/data/Sample_Game_3      # a sample game
+    python diagnostics.py ../sample-data/data/Sample_Game_3 --noised   # after the noise model
 """
 
 import sys
 
 import numpy as np
+from scipy.signal import find_peaks
 
-from possession import clean, control, features, io, touches
+from possession import clean, control, features, io, learned, noise, sample, touches
 
 PCT = [5, 25, 50, 75, 95, 99]
 
@@ -23,7 +25,12 @@ def histogram(lengths, edges):
 
 
 if __name__ == "__main__":
-    match = io.load_sample(sys.argv[1]) if len(sys.argv) > 1 else io.load_match()
+    if len(sys.argv) > 1:
+        match, _ = sample.load(sys.argv[1])
+        if "--noised" in sys.argv:
+            match = noise.degrade(match, 2027)
+    else:
+        match = io.load_match()
     graded = np.zeros(len(match.ball), dtype=bool)
     for start, stop in match.halves:
         graded[start:stop] = True
@@ -68,9 +75,53 @@ if __name__ == "__main__":
 
     frames, teams = touches.detect(feats)
     inside = graded[frames]
-    print("touches {}  home share {:.2f}".format(inside.sum(), (teams[inside] == io.HOME).mean()))
+    print("touches (rules, 3-frame detector) {}  home share {:.2f}".format(
+        inside.sum(), (teams[inside] == io.HOME).mean()))
+    frames, teams = learned.find_touches(match, feats)
+    inside = graded[frames]
+    print("touches (learned, 12-frame detector) {}  home share {:.2f}".format(
+        inside.sum(), (teams[inside] == io.HOME).mean()))
+
+    filled, usable = clean.fill_gaps(match.ball)
+    smoothed = clean.smooth(filled, usable)
+    high = [50, 75, 90, 95, 99, 99.9]
+    print("velocity change percentiles are {}".format(high))
+    for label, ball in (("raw", filled), ("smoothed", smoothed)):
+        for span in (3, 6, 12):
+            kink = clean.ball_kink(ball, span)[graded]
+            print("ball velocity change, {} ball, +/-{} frames (m/s): {}".format(
+                label, span, "  ".join("{:.2f}".format(v) for v in np.nanpercentile(kink, high))))
+    kink = np.nan_to_num(clean.ball_kink(smoothed))
+    for height in (1, 2, 3, 4, 6):
+        peaks, _ = find_peaks(kink, height=height, distance=5)
+        peaks = peaks[graded[peaks]]
+        near = feats.dist[peaks].min(axis=1) <= 2.0
+        print("velocity-change peaks over {} m/s: {}  with a player within 2 m: {}".format(
+            height, len(peaks), near.sum()))
+    step = np.linalg.norm(np.diff(match.ball[graded], axis=0), axis=1)
+    bend = np.linalg.norm(np.diff(match.ball[graded], n=2, axis=0), axis=1)
+    print("raw ball: unchanged from the previous frame {:.1%}  on a straight line through its "
+          "neighbours (within 1 mm) {:.1%}".format(
+              np.mean(step[~np.isnan(step)] == 0), np.mean(bend[~np.isnan(bend)] < 0.001)))
 
     if match.tags:
+        pieces = [tag for tag in match.tags if tag.code == "set pieces"]
+        for name, group in (("35 s set pieces", [t for t in pieces if t.stop - t.start > 500]),
+                            ("short set pieces", [t for t in pieces if t.stop - t.start <= 500])):
+            if not group:
+                continue
+            print("{} ({}), 5 s bins from 20 s before the tag start: player speed / ball seen / "
+                  "ball out by 0.5 m / ball speed".format(name, len(group)))
+            for offset in range(-20, 40, 5):
+                rows = np.concatenate([np.arange(t.start + offset * 25, t.start + (offset + 5) * 25)
+                                       for t in group])
+                rows = rows[(rows >= 0) & (rows < len(seen))]
+                got = rows[feats.valid[rows]]
+                print("  {:>4} s  {:.2f}  {:.0%}  {:.0%}  {:.2f}".format(
+                    offset, np.nanmean(feats.player_speed[rows]), seen[rows].mean(),
+                    (feats.outside[got] > 0.5).mean() if len(got) else 0,
+                    np.nanmean(feats.speed[got]) if len(got) else 0))
+
         by_team = [sum(tag.team == t for tag in match.tags) for t in (io.HOME, io.AWAY, -1)]
         print("tags: home {}  away {}  no team {}".format(*by_team))
         pieces = [tag for tag in match.tags if tag.code == "set pieces"]

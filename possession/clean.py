@@ -50,9 +50,8 @@ def ball_speed(ball):
     return speed
 
 
-def ball_kink(ball):
+def ball_kink(ball, k=KINK_SPAN):
     """Size of the velocity change at each frame in m/s; NaN next to a gap."""
-    k = KINK_SPAN
     kink = np.full(len(ball), np.nan)
     before = ball[k:-k] - ball[:-2 * k]
     after = ball[2 * k:] - ball[k:-k]

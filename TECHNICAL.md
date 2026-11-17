@@ -5,9 +5,16 @@
 Every frame inside the two halves gets one of three states: home possession (`H`), away
 possession (`A`) or dead ball (`D`). Frames outside the halves get `X`.
 
-The pipeline has no trained model. It computes two evidence streams per frame from the tracking
-and the Smart Tagging file, and a three-state hidden Markov model turns them into a label
-sequence.
+The pipeline computes per-frame evidence from the tracking and the Smart Tagging file, and a
+three-state hidden Markov model turns it into a label sequence. There are two versions, which
+share everything except where the evidence comes from:
+
+- **Learned emissions (the submitted file).** A LightGBM classifier trained on the three public
+  Metrica sample games gives the evidence. Described under "Learned emissions" below.
+- **Rules** (`--rules`, the first submission). The evidence is built with hand-set rules,
+  described in steps 1 to 9 and the next two sections.
+
+The steps of the rule version:
 
 1. **Load.** Player positions `(frames, 46 slots, 2)` and ball positions in metres, and the team
    of each slot from the metadata. The speed column of the tracking is not used; speeds are
@@ -33,7 +40,7 @@ sequence.
    touch after the old team's last touch, within 1 s of the decoded frame.
 9. **Write.** `frame,label` with LF line endings.
 
-## Possession rules
+## Possession rules (rule version)
 
 There is one decision mechanism, the Viterbi decoder. The rules below are consequences of the
 emission weights and the transition matrix.
@@ -54,7 +61,7 @@ emission weights and the transition matrix.
 - **Second-half lead-in.** Frames of a half before the start of its Smart Tagging
   `Kick Off (Start)` interval are forced to `D`. The kick-off frame is not hard-coded.
 
-## Parameters
+## Parameters (rule version)
 
 No parameter was chosen or adjusted using the challenge match or its public ground truth. Each
 comes from football reasoning or from statistics of public sample game 3.
@@ -101,9 +108,13 @@ matched to the metadata team names by string similarity.
 
 ## Training data
 
-None. There is no trained model and no labelled data from this match.
+The learned emissions are trained on the three public Metrica Sports sample games
+(https://github.com/metrica-sports/sample-data): other matches, with tracking and event data
+produced by Metrica Sports, about 428,000 frames in all. Labels for them are derived by rule from
+their tracking and events, as described below; no labels were written by hand. No labelled data
+from the challenge match is used for anything.
 
-Public sample game 3 from Metrica Sports (https://github.com/metrica-sports/sample-data, another
+For the rule version, public sample game 3 from Metrica Sports (https://github.com/metrica-sports/sample-data, another
 match, tracking and event data produced by Metrica Sports) was used to check thresholds, through
 the statistics quoted in the parameter table, and to test that the pipeline runs. For this,
 reference labels were derived by rule in `possession/sample.py`: dead ball where the sample
@@ -114,6 +125,72 @@ On sample game 3, against those reference labels, the pipeline scores spellF1 0.
 0.84 without set-piece information, and 0.61 and 0.87 when the sample's set-piece events stand in
 for Smart Tagging restarts. The sample tracking is cleaner than the match tracking (22 identified
 players, ball present whenever play is live), so these figures are not an estimate for the match.
+
+## Learned emissions (the submitted version)
+
+The submitted file comes from this version, the default of `make_submission.py`. A classifier
+replaces the hand-set evidence of the rule version. Decoding, boundary snapping and the Smart
+Tagging terms (phase team, set-piece lead-in, kick-off) are unchanged.
+
+- **Training data.** The three public Metrica sample games (other matches; tracking and events
+  produced by Metrica Sports), about 428,000 frames. Labels are derived by rule
+  (`possession/sample.py`): dead ball where the tracking has no ball, otherwise the team of the
+  most recent `PASS`, `CARRY`, `RECOVERY`, `SET PIECE` or `SHOT` event. Nothing is labelled by
+  hand and nothing from the challenge match is used.
+- **Noise model** (`possession/noise.py`). The sample tracking is degraded to resemble the match
+  tracking. During stoppages the ball is given a path to the restart spot, sometimes well beyond
+  the line, and moved about on the way. The whole ball track is smoothed (Gaussian, sigma 5.5
+  frames) with a slow wander added, because the match ball track has no sharp kicks. The ball is
+  removed in blocks of at least 5 s, more often during stoppages. Players are cut into tracklets
+  dealt into 46 anonymous slots, with occasional collapses in which many players are lost at
+  once. Every setting was fitted to whole-match summary statistics of the match tracking printed
+  by `diagnostics.py` (ball velocity-change percentiles at two time scales, share of ball
+  positions off the pitch and at rest, lengths of ball-missing runs, ball visibility around
+  set-piece tags, tracked players per frame, track lifetimes). No labels are involved and no
+  setting was chosen by validation score.
+- **Features.** The Phase 1 features plus: ball velocity change over 6 and 12 frames; frames
+  since and until the ball was seen; nearest player distances at the last and next frame with a
+  ball; frames since and until each team's touches; touch counts over 4 s; rolling means over 1,
+  2 and 6 s; player speed before and after.
+- **Touches.** The Phase 1 detector looks for a velocity change over 3 frames and finds 32
+  touches in the match, because the match ball track spreads a kick over about a second. The
+  learned version measures the change over 12 frames either side (threshold 8 m/s, player within
+  3 m).
+- **Set-piece tags.** Player speed and ball visibility averaged around the 59 set-piece tags show
+  play resuming about 5 s after the start of a tag, so the learned version counts the lead-in
+  up to that point as stoppage evidence.
+- **Model.** LightGBM, three classes, 300 rounds, 31 leaves, learning rate 0.05, fixed seed.
+  Each frame is also used mirrored (teams and labels swapped). The transition matrix is counted
+  from the sample labels.
+- **Emissions.** `0.5 * (log p(state | features) - log prior(state))`. The factor 0.5 accounts
+  for neighbouring frames carrying the same evidence. Leave-one-game-out scores for 0.2, 0.3, 0.5
+  and 1.0 are 0.542, 0.546, 0.555 and 0.559, all within noise; the middle value was kept.
+- **Validation.** Leave one game out: train on two noised games, score the third with the
+  official metric against its rule-derived labels.
+
+| | Game 1 | Game 2 | Game 3 | Mean spellF1 | Mean macroF1 |
+|---|---|---|---|---|---|
+| Rules | 0.493 | 0.492 | 0.446 | 0.477 | 0.780 |
+| Learned | 0.563 | 0.578 | 0.522 | 0.555 | 0.856 |
+
+The same comparison repeated with two other draws of the noise model (every game re-noised,
+models retrained):
+
+| Noise seed | Rules, mean spellF1 | Learned, mean spellF1 |
+|---|---|---|
+| 2027 | 0.477 | 0.555 |
+| 11 | 0.489 | 0.574 |
+| 500 | 0.460 | 0.540 |
+
+The learned version scores higher on every held-out game under every seed, by 0.03 to 0.13. This
+comparison is what the choice of the submitted version rests on.
+
+These scores are optimistic for the match. The held-out game is degraded by the same noise model
+the classifier was trained on, and that model reproduces summary statistics of the match
+tracking, not the tracking itself. The most used features are player speed after the frame and
+the nearest player distances over 2 s. An earlier noise model, built from published figures
+alone, gave 0.471 and 0.640; it was replaced after the match statistics showed it was wrong
+about the ball track.
 
 ## Limitations
 
@@ -128,7 +205,12 @@ players, ball present whenever play is live), so these figures are not an estima
   `diagnostics.py` prints how often attacking and defending tags of opposite teams overlap.
 - Slots are tracklets. A duplicated or swapped track near the ball can credit a touch to the
   wrong team.
-- Weights are set by hand. They were not fitted.
+- The rule version's weights are set by hand, not fitted.
+- The learned version is trained on other matches made to look like this one. The noise model
+  reproduces summary statistics of the match tracking, not its actual errors, so the classifier
+  may rely on something that does not carry over. No test data exist for this match to check it.
+- Reference labels for the sample games are derived by rule from events, which is not the same
+  definition as the challenge ground truth (derived from corrected tracking).
 
 ## Reproduction
 
@@ -139,4 +221,8 @@ repository next to this one and `MTAH_DATA_DIR` set:
 python make_submission.py
 ```
 
-writes `Second-Ball.csv`. The pipeline has no random component.
+writes `Second-Ball.csv` from the committed model in `models/`; no training is needed. Prediction
+has no random component. `python make_submission.py --rules` writes the rule version.
+
+To rebuild the model from the sample games, `python train.py`. Training uses a fixed seed and
+LightGBM's deterministic mode, and gives byte-identical model files on repeated runs.

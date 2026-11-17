@@ -21,9 +21,9 @@ def emissions(team, dead):
     return np.stack([team / 2, -team / 2, dead], axis=1)
 
 
-def viterbi(scores):
+def viterbi(scores, transitions=TRANSITIONS):
     """Most likely state sequence for one half."""
-    log_trans = np.log(TRANSITIONS)
+    log_trans = np.log(transitions)
     n = len(scores)
     back = np.zeros((n, 3), dtype=np.int8)
     best = scores[0].copy()

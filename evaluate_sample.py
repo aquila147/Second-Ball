@@ -44,10 +44,9 @@ if __name__ == "__main__":
     sys.path.insert(0, os.path.join(io.CHALLENGE_REPO, "evaluation"))
     import possession_metrics as pm
 
-    match = io.load_sample(args.folder)
+    match, truth = sample.load(args.folder)
     if args.set_pieces:
         match.tags = set_piece_tags(args.folder)
-    truth = sample.reference_labels(args.folder, match)
     codes = pipeline.label_codes(match)
 
     print("\n".join(pipeline.summary(codes)))

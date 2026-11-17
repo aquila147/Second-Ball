@@ -23,13 +23,17 @@ LEAD_IN = {"throw-in": 5, "goal kick": 12, "corner kick": 12, "free kick": 12,
            "kick off (after goal)": 30}
 
 
-def set_pieces(match, n):
-    """Lead-in before each tagged restart, and everything before each half's kick-off."""
+def set_pieces(match, n, restart=0):
+    """Lead-in before each tagged restart, and everything before each half's kick-off.
+
+    `restart` is how many frames after the start of a tag play is taken to resume.
+    """
     evidence = np.zeros(n)
     restarts = [tag for tag in match.tags if tag.code == "set pieces"]
     for tag in restarts:
         if tag.kind in LEAD_IN:
-            evidence[max(tag.start - LEAD_IN[tag.kind] * FPS, 0):tag.start] += W_LEAD_IN
+            first = max(tag.start - LEAD_IN[tag.kind] * FPS, 0)
+            evidence[first:tag.start + restart] += W_LEAD_IN
     for start, stop in match.halves:
         kickoffs = [tag.start for tag in restarts
                     if tag.kind == KICKOFF and start <= tag.stop and tag.start < stop]
